@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 import random
 from flask import Flask
@@ -23,7 +24,6 @@ Rules for chatting:
 5. If someone is rude, give a witty, sassy comeback and move on.
 """
 
-# Store short memory per chat (last 8 messages)
 chat_history = {}
 
 def get_ai_reply(chat_id: int, user_name: str, user_text: str) -> str:
@@ -31,7 +31,6 @@ def get_ai_reply(chat_id: int, user_name: str, user_text: str) -> str:
         chat_history[chat_id] = []
 
     chat_history[chat_id].append({"role": "user", "content": f"{user_name}: {user_text}"})
-    # Keep only last 8 messages for context
     chat_history[chat_id] = chat_history[chat_id][-8:]
 
     try:
@@ -66,19 +65,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name or "Friend"
     bot_username = context.bot.username.lower()
 
-    # Private DM: always reply
     if chat_type == "private":
         reply = get_ai_reply(update.message.chat_id, user_name, text)
         await update.message.reply_text(reply)
         return
 
-    # Group Chat: reply if mentioned, replied to, name called, or 25% random chance on active chat
     is_replied_to_bot = (
         update.message.reply_to_message
         and update.message.reply_to_message.from_user.id == context.bot.id
     )
     is_mentioned = f"@{bot_username}" in text.lower() or "aarohi" in text.lower()
-    random_chime_in = random.random() < 0.25  # 25% chance to join group conversation naturally
+    random_chime_in = random.random() < 0.25
 
     if is_replied_to_bot or is_mentioned or random_chime_in:
         reply = get_ai_reply(update.message.chat_id, user_name, text)
@@ -96,6 +93,10 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 def main():
+    # Fix for Python 3.14 asyncio event loop in MainThread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     threading.Thread(target=run_flask, daemon=True).start()
 
     application = Application.builder().token(BOT_TOKEN).build()
