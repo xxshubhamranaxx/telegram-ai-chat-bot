@@ -7,7 +7,6 @@ from groq import Groq
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Strip whitespace from keys to prevent auth errors
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
@@ -24,10 +23,33 @@ Rules for chatting:
 """
 
 chat_history = {}
+cached_model = None
+
+def get_active_model() -> str:
+    global cached_model
+    if cached_model:
+        return cached_model
+
+    models = groq_client.models.list()
+    blocked = ['whisper', 'guard', 'tts', 'orpheus', 'canopylabs', 'playai', 'distil', 'vision', 'compound']
+    available = [
+        m.id for m in models.data
+        if not any(b in m.id.lower() for b in blocked)
+    ]
+
+    for preferred in ['llama-3.3-70b', 'llama', 'qwen', 'gemma', 'mixtral']:
+        match = next((m for m in available if preferred in m.lower()), None)
+        if match:
+            cached_model = match
+            print(f"Selected Groq Model: {cached_model}")
+            return cached_model
+
+    cached_model = available[0]
+    print(f"Fallback Groq Model: {cached_model}")
+    return cached_model
 
 def get_ai_reply(chat_id: int, user_name: str, user_text: str) -> str:
     if not GROQ_API_KEY:
-        print("ERROR: GROQ_API_KEY is empty!")
         return "API key missing hai yaar, Render settings check kar 😅"
 
     if chat_id not in chat_history:
@@ -37,8 +59,9 @@ def get_ai_reply(chat_id: int, user_name: str, user_text: str) -> str:
     chat_history[chat_id] = chat_history[chat_id][-8:]
 
     try:
+        model_id = get_active_model()
         response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=model_id,
             messages=[{"role": "system", "content": SYSTEM_PROMPT}] + chat_history[chat_id],
             temperature=0.8,
             max_tokens=100
@@ -48,7 +71,7 @@ def get_ai_reply(chat_id: int, user_name: str, user_text: str) -> str:
         return reply
     except Exception as e:
         print(f"GROQ API ERROR DETAILS: {repr(e)}")
-        return f"Ek sec ruk yaar, thoda glitch aa gaya ({type(e).__name__}) 😅"
+        return "Ek sec ruk yaar, thoda glitch aa gaya 😅"
 
 # --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,13 +91,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name or "Friend"
     bot_username = (context.bot.username or "").lower()
 
-    # 1. Private DM: Reply to EVERY message
+    # Private DM: Reply to EVERY message
     if chat_type == "private":
         reply = get_ai_reply(update.message.chat_id, user_name, text)
         await update.message.reply_text(reply)
         return
 
-    # 2. Group / Supergroup Chat
+    # Group Chat
     is_replied_to_bot = (
         update.message.reply_to_message is not None
         and update.message.reply_to_message.from_user is not None
@@ -110,7 +133,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Bot is running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
